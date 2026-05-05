@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Redox Proteomics Viewer — Protein Search</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+<script src="js/app.js"></script>
+<script>renderBanner(); renderStudyPopup();</script>
+
+<main class="container">
+  <h1 class="page-title">🧬 Redox Proteomics Visualization Tool</h1>
+
+  <div class="search-wrap">
+    <label for="search-input">Search protein — UniProt Accession, Protein name or Gene name</label>
+    <input id="search-input" class="search-input" type="text"
+           placeholder="e.g. P97379 · G3BP2 · Cofilin-1 …"
+           autocomplete="off" spellcheck="false">
+    <button class="search-clear" id="search-clear" title="Clear">×</button>
+    <div class="autocomplete-list" id="autocomplete-list"></div>
+  </div>
+
+  <!-- Default: workflow diagram -->
+  <div id="workflow-section">
+    <h2>🧪 Experimental Workflow Overview</h2>
+    <img src="assets/Workflow.png" alt="Experimental workflow diagram">
+  </div>
+
+  <!-- Results -->
+  <div id="result-section">
+    <div class="protein-header" id="protein-header"></div>
+    <div class="two-col">
+      <div class="card">
+        <div class="card-title psoh">Sulfenylation (PSOH)</div>
+        <div id="psoh-content">
+          <div class="plot-container" id="plot-psoh"></div>
+          <div id="table-psoh"></div>
+        </div>
+        <div class="no-data" id="psoh-nodata" style="display:none;">No Sulfenylation data for this protein.</div>
+      </div>
+      <div class="card">
+        <div class="card-title pssh">Persulfidation (PSSH)</div>
+        <div id="pssh-content">
+          <div class="plot-container" id="plot-pssh"></div>
+          <div id="table-pssh"></div>
+        </div>
+        <div class="no-data" id="pssh-nodata" style="display:none;">No Persulfidation data for this protein.</div>
+      </div>
+    </div>
+    <div id="uniprot-section">
+      <div id="uniprot-panel"></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  Redox Proteomics Viewer &nbsp;·&nbsp; <a href="contact.html">Contact us</a>
+</footer>
+
+<script>
+let PROTEINS = {}, PSOH_DB = {}, PSSH_DB = {};
+let dataLoaded = false;
+let currentAcc = null;
+
+async function loadData() {
+  const [p, oh, sh] = await Promise.all([
+    fetch('data/proteins.json').then(r => r.json()),
+    fetch('data/psoh.json').then(r => r.json()),
+    fetch('data/pssh.json').then(r => r.json()),
+  ]);
+  PROTEINS = p; PSOH_DB = oh; PSSH_DB = sh;
+  dataLoaded = true;
+}
+
+// ─── SEARCH ──────────────────────────────────────────────────────────────────
+const searchInput = document.getElementById('search-input');
+const clearBtn    = document.getElementById('search-clear');
+const dropList    = document.getElementById('autocomplete-list');
+let focusIdx = -1, searchIndex = null;
+
+function buildSearchIndex() {
+  const items = [];
+  for (const [acc, p] of Object.entries(PROTEINS)) {
+    items.push({ acc, display: p.name, sub: acc,    tag: 'protein', key: p.name.toUpperCase() });
+    if (p.gene) items.push({ acc, display: p.gene,  sub: p.name,   tag: 'gene',    key: p.gene.toUpperCase() });
+    items.push({ acc, display: acc,    sub: p.name, tag: 'acc',     key: acc.toUpperCase() });
+  }
+  return items;
+}
+
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim();
+  clearBtn.style.display = q ? 'block' : 'none';
+  if (!dataLoaded) return;
+  if (!searchIndex) searchIndex = buildSearchIndex();
+  if (!q) {
+    // Show first 80 proteins alphabetically when nothing typed
+    renderDropdown(searchIndex.filter(i => i.tag === 'protein').slice(0, 80), '');
+    return;
+  }
+  const qU = q.toUpperCase();
+  renderDropdown(searchIndex.filter(i => i.key.includes(qU)).slice(0, 60), q);
+});
+
+searchInput.addEventListener('focus', () => {
+  if (!dataLoaded) return;
+  if (searchInput.value.trim()) return;  // already has text — input handler covers it
+  if (!searchIndex) searchIndex = buildSearchIndex();
+  renderDropdown(searchIndex.filter(i => i.tag === 'protein').slice(0, 80), '');
+});
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function hl(str, q) {
+  const idx = str.toUpperCase().indexOf(q.toUpperCase());
+  if (idx < 0) return esc(str);
+  return esc(str.slice(0,idx)) + `<strong style="color:var(--accent)">${esc(str.slice(idx,idx+q.length))}</strong>` + esc(str.slice(idx+q.length));
+}
+
+function renderDropdown(results, q) {
+  focusIdx = -1;
+  if (!results.length) {
+    dropList.innerHTML = `<div class="autocomplete-no-results">No results for "${esc(q)}"</div>`;
+  } else {
+    dropList.innerHTML = results.map(item => `
+      <div class="autocomplete-item" data-acc="${esc(item.acc)}">
+        <span class="ai-name">${hl(item.display, q)}</span>
+        <span class="ai-tag ${item.tag==='gene'?'gene':''}">${item.tag}</span>
+        <span class="ai-sub">${item.sub !== item.display ? esc(item.sub) : ''}</span>
+      </div>`).join('');
+    dropList.querySelectorAll('.autocomplete-item').forEach(el =>
+      el.addEventListener('mousedown', e => { e.preventDefault(); selectProtein(el.dataset.acc); })
+    );
+  }
+  dropList.classList.add('open');
+}
+
+function closeDropdown() { dropList.classList.remove('open'); dropList.innerHTML = ''; focusIdx = -1; }
+
+searchInput.addEventListener('keydown', e => {
+  const items = dropList.querySelectorAll('.autocomplete-item');
+  if (e.key === 'ArrowDown')  { e.preventDefault(); focusIdx = Math.min(focusIdx+1, items.length-1); updateFocus(items); }
+  else if (e.key === 'ArrowUp')   { e.preventDefault(); focusIdx = Math.max(focusIdx-1, 0); updateFocus(items); }
+  else if (e.key === 'Enter' && focusIdx >= 0 && items[focusIdx]) selectProtein(items[focusIdx].dataset.acc);
+  else if (e.key === 'Escape') closeDropdown();
+});
+
+function updateFocus(items) {
+  items.forEach((el, i) => el.classList.toggle('focused', i === focusIdx));
+  items[focusIdx]?.scrollIntoView({ block: 'nearest' });
+}
+
+clearBtn.addEventListener('click', () => {
+  searchInput.value = ''; clearBtn.style.display = 'none'; closeDropdown(); showWorkflow();
+});
+document.addEventListener('click', e => { if (!e.target.closest('.search-wrap')) closeDropdown(); });
+
+// ─── DISPLAY ─────────────────────────────────────────────────────────────────
+function selectProtein(acc) {
+  const p = PROTEINS[acc]; if (!p) return;
+  searchInput.value = p.name || acc;
+  clearBtn.style.display = 'block';
+  closeDropdown();
+  displayProtein(acc);
+}
+
+function showWorkflow() {
+  document.getElementById('workflow-section').style.display = '';
+  document.getElementById('result-section').classList.remove('visible');
+  currentAcc = null;
+}
+
+function displayProtein(acc) {
+  currentAcc = acc;
+  document.getElementById('workflow-section').style.display = 'none';
+  document.getElementById('result-section').classList.add('visible');
+
+  const psoh = PSOH_DB[acc] || null;
+  const pssh = PSSH_DB[acc] || null;
+  const p    = PROTEINS[acc] || {};
+
+  document.getElementById('protein-header').innerHTML = `
+    <h2>${esc(p.name || acc)}</h2>
+    <span class="acc-badge">${esc(acc)}</span>
+    ${p.gene ? `&nbsp;<span class="acc-badge" style="color:var(--green);border-color:rgba(46,125,50,0.3);background:rgba(46,125,50,0.08)">${esc(p.gene)}</span>` : ''}`;
+
+  if (psoh) {
+    document.getElementById('psoh-content').style.display = '';
+    document.getElementById('psoh-nodata').style.display = 'none';
+  } else {
+    document.getElementById('psoh-content').style.display = 'none';
+    document.getElementById('psoh-nodata').style.display = '';
+  }
+
+  if (pssh) {
+    document.getElementById('pssh-content').style.display = '';
+    document.getElementById('pssh-nodata').style.display = 'none';
+  } else {
+    document.getElementById('pssh-content').style.display = 'none';
+    document.getElementById('pssh-nodata').style.display = '';
+  }
+
+  // Synchronise plot heights — both get the taller of the two
+  const sharedHeight = Math.max(calcPlotHeight(psoh), calcPlotHeight(pssh));
+  if (psoh) { buildBoxplot('plot-psoh', psoh, sharedHeight); buildFCTable('table-psoh', psoh); }
+  if (pssh) { buildBoxplot('plot-pssh', pssh, sharedHeight); buildFCTable('table-pssh', pssh); }
+
+  renderUniProtPanel(acc, document.getElementById('uniprot-panel'));
+}
+
+// Called by app.js toggleTheme — re-renders all visible plots
+function rerenderPlots() {
+  if (!currentAcc) return;
+  const psoh = PSOH_DB[currentAcc];
+  const pssh = PSSH_DB[currentAcc];
+  const sharedHeight = Math.max(calcPlotHeight(psoh), calcPlotHeight(pssh));
+  if (psoh) { buildBoxplot('plot-psoh', psoh, sharedHeight); buildFCTable('table-psoh', psoh); }
+  if (pssh) { buildBoxplot('plot-pssh', pssh, sharedHeight); buildFCTable('table-pssh', pssh); }
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+(async () => { await loadData(); searchIndex = buildSearchIndex(); })();
+</script>
+</body>
+</html>

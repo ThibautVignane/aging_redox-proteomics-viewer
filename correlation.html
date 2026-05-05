@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Redox Proteomics Viewer — PTM Correlation</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+<script src="js/app.js"></script>
+<script>renderBanner(); renderStudyPopup();</script>
+
+<main class="container">
+  <h1 class="page-title">📊 Log₂FC Correlation between PSOH and PSSH</h1>
+
+  <div style="max-width:380px; margin:0 auto 24px;">
+    <label class="form-label">Comparison</label>
+    <select id="comparison-select" class="form-select">
+      <option>WT 10 mo vs WT 10 we</option>
+      <option>WT 18 mo vs WT 10 we</option>
+      <option>WT 18 mo vs WT 10 mo</option>
+      <option>CSE-/- 10 we vs WT 10 we</option>
+    </select>
+  </div>
+
+  <div class="correlation-layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar-panel">
+      <div class="finder-box prot-finder">
+        <h3>📍 ProtFinder</h3>
+        <p>Enter UniProt Accession, Protein name or Gene name — one per line — to highlight on the scatter plot.</p>
+        <textarea id="prot-input" class="finder-textarea" rows="4"
+                  placeholder="Examples:&#10;P97379&#10;G3BP2&#10;Cofilin-1"></textarea>
+        <div class="btn-row">
+          <button class="btn btn-danger btn-full" onclick="applyProtFinder()">Search</button>
+          <button class="btn btn-ghost" onclick="resetProtFinder()">Reset</button>
+        </div>
+      </div>
+
+      <div class="finder-box path-finder">
+        <h3>🧭 PathFinder</h3>
+        <p>Select a pathway to highlight all associated proteins on the scatter plot.</p>
+        <div class="form-group">
+          <label class="form-label">Annotation source</label>
+          <select id="annotation-source" class="form-select" onchange="onAnnotationChange()">
+            <option value="GO-BP">GO Biological Process</option>
+            <option value="KEGG">KEGG Pathway</option>
+          </select>
+        </div>
+        <div class="form-group" style="position:relative;">
+          <label class="form-label">Pathway</label>
+          <input id="pathway-search" class="form-input" type="text"
+                 placeholder="Type to filter pathways…" oninput="filterPathwayOptions()" onfocus="showAllPathways()" autocomplete="off">
+          <div id="pathway-dropdown" class="autocomplete-list"
+               style="position:absolute;top:100%;left:0;right:0;border-radius:0 0 8px 8px;"></div>
+        </div>
+        <div id="selected-pathway-badge" style="display:none;margin-bottom:8px;font-size:12px;color:var(--green);">
+          ✅ <span id="selected-pathway-text"></span>
+        </div>
+        <button class="btn btn-ghost btn-full" onclick="resetPathFinder()">Reset Pathway</button>
+      </div>
+    </aside>
+
+    <!-- Scatter -->
+    <div>
+      <div class="chart-card">
+        <div id="scatter-chart"></div>
+        <div class="scatter-legend" id="scatter-legend"></div>
+      </div>
+    </div>
+
+  </div><!-- /correlation-layout -->
+
+  <!-- Protein detail on click -->
+  <div id="corr-detail">
+    <div class="protein-header" id="corr-protein-header"></div>
+    <div class="two-col">
+      <div class="card">
+        <div class="card-title psoh">Sulfenylation (PSOH)</div>
+        <div id="corr-psoh-content">
+          <div class="plot-container" id="corr-plot-psoh"></div>
+          <div id="corr-table-psoh"></div>
+        </div>
+        <div class="no-data" id="corr-psoh-nodata" style="display:none;">No Sulfenylation data.</div>
+      </div>
+      <div class="card">
+        <div class="card-title pssh">Persulfidation (PSSH)</div>
+        <div id="corr-pssh-content">
+          <div class="plot-container" id="corr-plot-pssh"></div>
+          <div id="corr-table-pssh"></div>
+        </div>
+        <div class="no-data" id="corr-pssh-nodata" style="display:none;">No Persulfidation data.</div>
+      </div>
+    </div>
+    <div id="corr-uniprot-panel" style="margin-top:20px;"></div>
+  </div>
+
+</main>
+
+<footer>Redox Proteomics Viewer &nbsp;·&nbsp; <a href="contact.html">Contact us</a></footer>
+
+<script>
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let META = {}, FCS = {}, PSOH_DB = {}, PSSH_DB = {}, PATHWAYS = {};
+let currentComparison = 'WT 10 mo vs WT 10 we';
+let userHighlight = [], pathwayHighlight = [];
+let selectedPathwayRaw = '';
+let chart = null;
+let currentDetailAcc = null;
+
+const THR = 0.38;
+const CAT_COLORS = {
+  'up-up':'#FF4C4C', 'dn-dn':'#2ECC71',
+  'up-dn':'#3498DB', 'dn-up':'#9B59B6', 'mixed':'#888'
+};
+
+function classify(x, y) {
+  if (x >= THR  && y >= THR)  return 'up-up';
+  if (x <= -THR && y <= -THR) return 'dn-dn';
+  if (x >= THR  && y <= -THR) return 'up-dn';
+  if (x <= -THR && y >= THR)  return 'dn-up';
+  return 'mixed';
+}
+
+// ─── LOAD ─────────────────────────────────────────────────────────────────────
+async function loadAll() {
+  const [meta, fcs, oh, sh, pw] = await Promise.all([
+    fetch('data/scatter_meta.json').then(r=>r.json()),
+    fetch('data/scatter_fcs.json').then(r=>r.json()),
+    fetch('data/psoh.json').then(r=>r.json()),
+    fetch('data/pssh.json').then(r=>r.json()),
+    fetch('data/pathways.json').then(r=>r.json()),
+  ]);
+  META=meta; FCS=fcs; PSOH_DB=oh; PSSH_DB=sh; PATHWAYS=pw;
+  buildChart();
+  buildPathwayList();
+}
+
+// ─── SCATTER ─────────────────────────────────────────────────────────────────
+function getEChartsColors() {
+  const dark = getTheme() === 'dark';
+  return {
+    text:      dark ? '#e6edf3' : '#1a2332',
+    axisLine:  dark ? '#555'    : '#1a2332',
+    axisTick:  dark ? '#555'    : '#1a2332',
+    axisLabel: dark ? '#9aa5b4' : '#1a2332',
+    splitLine: dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.12)',
+    tooltip_bg: dark ? 'rgba(14,17,23,0.92)' : 'rgba(255,255,255,0.95)',
+    tooltip_text: dark ? '#e6edf3' : '#1a2332',
+    tooltip_border: dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.15)',
+  };
+}
+
+function buildChart() {
+  const container = document.getElementById('scatter-chart');
+  if (!chart) {
+    chart = echarts.init(container);
+    chart.on('click', params => { if (params.data?.acc) showProteinDetail(params.data.acc); });
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  const EC = getEChartsColors();
+  const rows  = FCS[currentComparison] || [];
+  const anyHl = userHighlight.length > 0 || pathwayHighlight.length > 0;
+
+  const pts = rows.map(([acc, psoh_fc, pssh_fc]) => {
+    const m   = META[acc] || {};
+    const cat = classify(psoh_fc, pssh_fc);
+    const isProt = userHighlight.includes(acc);
+    const isPath = pathwayHighlight.includes(acc);
+    const isBoth = isProt && isPath;
+    let color, opacity, size;
+    if (!anyHl) { color = CAT_COLORS[cat]; opacity = 0.82; size = 8; }
+    else if (isBoth) { color = '#FFEB3B'; opacity = 1; size = 14; }
+    else if (isProt) { color = '#FF1744'; opacity = 1; size = 13; }
+    else if (isPath) { color = '#00E676'; opacity = 1; size = 13; }
+    else             { color = getTheme()==='dark'?'#555':'#bbb'; opacity = 0.2; size = 6; }
+    return {
+      acc, value: [psoh_fc, pssh_fc],
+      itemStyle: { color, opacity },
+      symbolSize: size,
+      tooltip: { formatter: () =>
+        `<b>${m.name||acc}</b><br>Gene: ${m.gene||'—'}<br>Accession: ${acc}<br>PSOH Log₂FC: ${psoh_fc.toFixed(3)}<br>PSSH Log₂FC: ${pssh_fc.toFixed(3)}<br><span style="color:${CAT_COLORS[cat]}">● ${cat}</span>`
+      },
+    };
+  });
+
+  const xs = rows.map(r=>r[1]), ys = rows.map(r=>r[2]);
+  const option = {
+    backgroundColor: 'transparent',
+    title: {
+      text: `Log₂FC: ${currentComparison}`,
+      left: 'center', top: 6,
+    },
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: EC.tooltip_bg,
+      borderColor: EC.tooltip_border,
+    },
+    xAxis: {
+      name: 'Log₂FC (PSOH)', nameLocation: 'middle', nameGap: 28,
+      nameTextStyle: { color: EC.axisLabel, fontSize: 13 },
+      axisLine:  { lineStyle: { color: EC.axisLine } },
+      axisTick:  { lineStyle: { color: EC.axisTick } },
+      axisLabel: { color: EC.axisLabel },
+      splitLine: { lineStyle: { color: EC.splitLine } },
+    },
+    yAxis: {
+      name: 'Log₂FC (PSSH)', nameLocation: 'middle', nameGap: 42,
+      nameTextStyle: { color: EC.axisLabel, fontSize: 13 },
+      axisLine:  { lineStyle: { color: EC.axisLine } },
+      axisTick:  { lineStyle: { color: EC.axisTick } },
+      axisLabel: { color: EC.axisLabel },
+      splitLine: { lineStyle: { color: EC.splitLine } },
+    },
+    series: [{ type: 'scatter', data: pts, large: true }],
+  };
+
+  chart.setOption(option, true);
+  renderLegend(anyHl);
+}
+
+function pearson(xs, ys) {
+  const n=xs.length; if(n<2)return 0;
+  const mx=xs.reduce((a,b)=>a+b)/n, my=ys.reduce((a,b)=>a+b)/n;
+  let num=0,dx2=0,dy2=0;
+  for(let i=0;i<n;i++){const dx=xs[i]-mx,dy=ys[i]-my;num+=dx*dy;dx2+=dx*dx;dy2+=dy*dy;}
+  return num/Math.sqrt(dx2*dy2);
+}
+
+function renderLegend(anyHl) {
+  const leg = document.getElementById('scatter-legend');
+  if (anyHl) {
+    leg.innerHTML =
+      (userHighlight.length   ? '<span class="legend-item"><span class="legend-dot" style="background:#FF1744"></span>ProtFinder selected</span>' : '') +
+      (pathwayHighlight.length? '<span class="legend-item"><span class="legend-dot" style="background:#00E676"></span>Pathway selected</span>' : '') +
+      (userHighlight.length && pathwayHighlight.length ? '<span class="legend-item"><span class="legend-dot" style="background:#FFEB3B"></span>Both</span>' : '') +
+      '<span class="legend-item" style="color:var(--muted);font-size:11px">Others dimmed</span>';
+  } else {
+    leg.innerHTML = [
+      ['up-up', '#FF4C4C', 'PSOH↑ / PSSH↑'],
+      ['dn-dn', '#2ECC71', 'PSOH↓ / PSSH↓'],
+      ['up-dn', '#3498DB', 'PSOH↑ / PSSH↓'],
+      ['dn-up', '#9B59B6', 'PSOH↓ / PSSH↑'],
+      ['mixed', '#888',    'Mixed / unchanged'],
+    ].map(([, color, label]) =>
+      `<span class="legend-item">
+         <span class="legend-dot" style="background:${color}"></span>
+         ${label}
+       </span>`
+    ).join('');
+  }
+}
+
+document.getElementById('comparison-select').addEventListener('change', function() {
+  currentComparison = this.value; buildChart();
+});
+
+// ─── PROTFINDER ──────────────────────────────────────────────────────────────
+function applyProtFinder() {
+  const queries = document.getElementById('prot-input').value
+    .split('\n').map(s=>s.trim()).filter(Boolean);
+  if (!queries.length) { userHighlight=[]; buildChart(); return; }
+  const matched = new Set();
+  for (const [acc, m] of Object.entries(META)) {
+    const aU=acc.toUpperCase(), nU=(m.name||'').toUpperCase(), gU=(m.gene||'').toUpperCase();
+    const nC=nU.replace(/_[A-Z]+$/,'');
+    for (const q of queries) {
+      const qU=q.toUpperCase(), qC=qU.replace(/_[A-Z]+$/,'');
+      if(aU===qU||nU===qU||gU===qU||nC===qC) matched.add(acc);
+    }
+  }
+  userHighlight=[...matched]; buildChart();
+}
+function resetProtFinder() { document.getElementById('prot-input').value=''; userHighlight=[]; buildChart(); }
+
+// ─── PATHFINDER ──────────────────────────────────────────────────────────────
+let pathwayList = [];
+
+function cleanPathwayName(n) { return n.replace(/\s*-\s*Mus musculus.*$/i,'').trim(); }
+
+function buildPathwayList() {
+  const src = document.getElementById('annotation-source').value;
+  pathwayList = src === 'GO-BP'
+    ? (PATHWAYS.go_names||[]).map(n=>({raw:n, display:n}))
+    : (PATHWAYS.kegg_names||[]).map(n=>({raw:n, display:cleanPathwayName(n)}));
+}
+
+function onAnnotationChange() {
+  document.getElementById('pathway-search').value='';
+  document.getElementById('pathway-dropdown').classList.remove('open');
+  document.getElementById('selected-pathway-badge').style.display='none';
+  selectedPathwayRaw=''; pathwayHighlight=[]; buildChart(); buildPathwayList();
+}
+
+function esc2(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function hl2(str,q){
+  if(!q)return esc2(str);
+  const idx=str.toUpperCase().indexOf(q.toUpperCase());
+  if(idx<0)return esc2(str);
+  return esc2(str.slice(0,idx))+`<strong style="color:var(--green)">${esc2(str.slice(idx,idx+q.length))}</strong>`+esc2(str.slice(idx+q.length));
+}
+
+function showAllPathways() {
+  // Show up to 120 pathways immediately when the field is focused with no query
+  const q = document.getElementById('pathway-search').value.trim();
+  if (q) return;  // already has text — filterPathwayOptions covers it
+  const dd = document.getElementById('pathway-dropdown');
+  const list = pathwayList.slice(0, 120);
+  if (!list.length) return;
+  dd.innerHTML = list.map(p =>
+    `<div class="autocomplete-item" data-raw="${esc2(p.raw)}" data-display="${esc2(p.display)}">
+       <span class="ai-name">${esc2(p.display)}</span>
+     </div>`).join('');
+  dd.classList.add('open');
+  dd.querySelectorAll('.autocomplete-item').forEach(el =>
+    el.addEventListener('mousedown', e => { e.preventDefault(); selectPathway(el.dataset.raw, el.dataset.display); })
+  );
+}
+
+function filterPathwayOptions() {
+  const q  = document.getElementById('pathway-search').value.trim().toUpperCase();
+  const dd = document.getElementById('pathway-dropdown');
+  if (!q) { showAllPathways(); return; }
+  const filtered = pathwayList.filter(p=>p.display.toUpperCase().includes(q)).slice(0,80);
+  if (!filtered.length) {
+    dd.innerHTML=`<div class="autocomplete-no-results">No pathways found</div>`; dd.classList.add('open'); return;
+  }
+  const qOrig = document.getElementById('pathway-search').value;
+  dd.innerHTML = filtered.map(p =>
+    `<div class="autocomplete-item" data-raw="${esc2(p.raw)}" data-display="${esc2(p.display)}">
+       <span class="ai-name">${hl2(p.display,qOrig)}</span>
+     </div>`).join('');
+  dd.classList.add('open');
+  dd.querySelectorAll('.autocomplete-item').forEach(el =>
+    el.addEventListener('mousedown', e => { e.preventDefault(); selectPathway(el.dataset.raw, el.dataset.display); })
+  );
+}
+
+function selectPathway(raw, display) {
+  selectedPathwayRaw = raw;
+  document.getElementById('pathway-search').value = display;
+  document.getElementById('pathway-dropdown').classList.remove('open');
+  document.getElementById('selected-pathway-badge').style.display='';
+  document.getElementById('selected-pathway-text').textContent = display;
+  const src   = document.getElementById('annotation-source').value;
+  const field = src==='GO-BP' ? 'go_bp_names' : 'kegg_names';
+  const rawUp = raw.toUpperCase();
+  pathwayHighlight = Object.entries(META)
+    .filter(([,m]) => String(m[field]||'').split(';').map(t=>t.trim().toUpperCase()).includes(rawUp))
+    .map(([acc])=>acc);
+  buildChart();
+}
+
+function resetPathFinder() {
+  document.getElementById('pathway-search').value='';
+  document.getElementById('selected-pathway-badge').style.display='none';
+  document.getElementById('pathway-dropdown').classList.remove('open');
+  selectedPathwayRaw=''; pathwayHighlight=[]; buildChart();
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.finder-box.path-finder'))
+    document.getElementById('pathway-dropdown').classList.remove('open');
+});
+
+// ─── PROTEIN DETAIL ───────────────────────────────────────────────────────────
+function showProteinDetail(acc) {
+  currentDetailAcc = acc;
+  const m = META[acc]||{};
+  const psoh = PSOH_DB[acc]||null, pssh = PSSH_DB[acc]||null;
+
+  document.getElementById('corr-protein-header').innerHTML = `
+    <h2>${esc2(m.name||acc)}</h2>
+    <span class="acc-badge">${esc2(acc)}</span>
+    ${m.gene?`&nbsp;<span class="acc-badge" style="color:var(--green);border-color:rgba(46,125,50,0.3);background:rgba(46,125,50,0.08)">${esc2(m.gene)}</span>`:''}
+    &nbsp;<a class="uniprot-link" style="font-size:12px;padding:5px 12px;"
+       href="https://www.uniprot.org/uniprotkb/${esc2(acc)}" target="_blank">UniProt ↗</a>`;
+
+  if (psoh) {
+    document.getElementById('corr-psoh-content').style.display=''; document.getElementById('corr-psoh-nodata').style.display='none';
+  } else {
+    document.getElementById('corr-psoh-content').style.display='none'; document.getElementById('corr-psoh-nodata').style.display='';
+  }
+  if (pssh) {
+    document.getElementById('corr-pssh-content').style.display=''; document.getElementById('corr-pssh-nodata').style.display='none';
+  } else {
+    document.getElementById('corr-pssh-content').style.display='none'; document.getElementById('corr-pssh-nodata').style.display='';
+  }
+
+  // Synchronise heights — both plots get the taller of the two
+  const sharedH = Math.max(calcPlotHeight(psoh), calcPlotHeight(pssh));
+  if (psoh) { buildBoxplot('corr-plot-psoh', psoh, sharedH); buildFCTable('corr-table-psoh', psoh); }
+  if (pssh) { buildBoxplot('corr-plot-pssh', pssh, sharedH); buildFCTable('corr-table-pssh', pssh); }
+
+  renderUniProtPanel(acc, document.getElementById('corr-uniprot-panel'));
+  const det = document.getElementById('corr-detail');
+  det.classList.add('visible');
+  det.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+// Called by app.js toggleTheme
+function rerenderPlots() {
+  buildChart();
+  if (currentDetailAcc) {
+    const psoh = PSOH_DB[currentDetailAcc], pssh = PSSH_DB[currentDetailAcc];
+    const sharedH = Math.max(calcPlotHeight(psoh), calcPlotHeight(pssh));
+    if (psoh) { buildBoxplot('corr-plot-psoh', psoh, sharedH); buildFCTable('corr-table-psoh', psoh); }
+    if (pssh) { buildBoxplot('corr-plot-pssh', pssh, sharedH); buildFCTable('corr-table-pssh', pssh); }
+  }
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+loadAll();
+</script>
+</body>
+</html>

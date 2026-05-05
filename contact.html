@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Redox Proteomics Viewer — Contact</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<script src="js/app.js"></script>
+<script>renderBanner(); renderStudyPopup();</script>
+
+<main class="container">
+  <div class="contact-wrap">
+    <h1 class="page-title">📬 Contact Us</h1>
+    <p style="text-align:center;color:var(--muted);margin-bottom:32px;font-size:14px;">
+      Questions, issues, or collaboration proposals — we will get back to you shortly.
+    </p>
+
+    <div class="card">
+      <!--
+        Replace YOUR_FORM_ID with your Formspree form ID.
+        Sign up free at https://formspree.io → New Form → copy the ID.
+        Example: https://formspree.io/f/xpzgkrjb → use "xpzgkrjb"
+      -->
+      <form id="contact-form" action="https://formspree.io/f/xgodyobl" method="POST" novalidate>
+
+        <div class="form-group">
+          <label class="form-label" for="purpose">Purpose of message</label>
+          <select id="purpose" name="purpose" class="form-select">
+            <option value="Issue / Request about tool">Issue / Request about tool</option>
+            <option value="Collaboration">Collaboration</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="email">Your email <span style="color:var(--red)">*</span></label>
+          <input id="email" name="email" type="email" class="form-input-full"
+                 placeholder="your.email@example.com" required autocomplete="email">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="subject">Subject <span style="color:var(--muted)">(optional)</span></label>
+          <input id="subject" name="subject" type="text" class="form-input-full"
+                 placeholder="Add extra context…" autocomplete="off">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="message">Message <span style="color:var(--red)">*</span></label>
+          <textarea id="message" name="message" class="form-textarea" rows="7"
+                    placeholder="Write your message here…" required minlength="20"></textarea>
+        </div>
+
+        <!-- ─── Math CAPTCHA ─── -->
+        <div class="form-group">
+          <label class="form-label">Anti-spam verification <span style="color:var(--red)">*</span></label>
+          <div class="captcha-box">
+            <span class="captcha-question" id="captcha-question">Loading…</span>
+            <span style="color:var(--muted);font-size:16px;">=</span>
+            <input id="captcha-input" class="captcha-input" type="text"
+                   placeholder="?" autocomplete="off" inputmode="numeric" maxlength="4">
+            <button type="button" class="btn btn-ghost" onclick="refreshCaptcha()" title="New question" style="padding:6px 10px;">🔄</button>
+            <span class="captcha-hint">Please solve the simple maths question above to prove you are not a robot.</span>
+          </div>
+        </div>
+
+        <!-- Honeypot anti-spam (hidden from real users) -->
+        <input type="text" name="_gotcha" style="display:none" tabindex="-1" autocomplete="off">
+
+        <div id="form-feedback"></div>
+
+        <button type="submit" id="submit-btn" class="btn btn-primary btn-full" style="margin-top:12px;">
+          ✉️ Send Message
+        </button>
+      </form>
+    </div>
+
+    <div style="margin-top:32px;text-align:center;color:var(--muted);font-size:13px;line-height:2.2;">
+      <p><strong style="color:var(--text)">Thibaut Vignane</strong> — Postdoctoral researcher</p>
+      <p><strong style="color:var(--text)">Prof. Milos Filipovic</strong> — Principal Investigator</p>
+      <p style="margin-top:4px;">Institute of Physiology, University of Glasgow</p>
+    </div>
+  </div>
+</main>
+
+<footer>Redox Proteomics Viewer &nbsp;·&nbsp; <a href="index.html">Protein Search</a></footer>
+
+<script>
+function rerenderPlots() {}   // no plots on this page
+
+// ─── MATH CAPTCHA ────────────────────────────────────────────────────────────
+// Uses simple arithmetic that is trivially solvable by humans
+// but stops all dumb bots and most scrapers.
+// The answer is never sent to the server — only validated client-side
+// before we allow the form to be submitted.
+
+let _captchaAnswer = 0;
+
+const OPS = [
+  (a, b) => ({ q: `${a} + ${b}`, a: a + b }),
+  (a, b) => ({ q: `${a} − ${b}`, a: a - b }),
+  (a, b) => ({ q: `${a} × ${b}`, a: a * b }),
+];
+
+function refreshCaptcha() {
+  const op = OPS[Math.floor(Math.random() * OPS.length)];
+  // Keep numbers small so mental arithmetic is easy
+  const a  = Math.floor(Math.random() * 12) + 1;
+  const b  = Math.floor(Math.random() * 10) + 1;
+  const { q, a: ans } = op(a, b);
+  _captchaAnswer = ans;
+  document.getElementById('captcha-question').textContent = q;
+  document.getElementById('captcha-input').value = '';
+  document.getElementById('captcha-input').style.borderColor = '';
+}
+
+// Initialise on page load
+refreshCaptcha();
+
+// ─── FORM SUBMIT ──────────────────────────────────────────────────────────────
+const form     = document.getElementById('contact-form');
+const feedback = document.getElementById('form-feedback');
+
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  feedback.innerHTML = '';
+
+  const email   = document.getElementById('email').value.trim();
+  const msg     = document.getElementById('message').value.trim();
+  const captcha = document.getElementById('captcha-input');
+
+  // Validate email
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    feedback.innerHTML = '<div class="msg-error">❗ Please enter a valid email address.</div>';
+    return;
+  }
+
+  // Validate message length
+  if (msg.length < 20) {
+    feedback.innerHTML = '<div class="msg-error">❗ Your message is too short — please provide more detail.</div>';
+    return;
+  }
+
+  // Validate CAPTCHA
+  const userAnswer = parseInt(captcha.value.trim(), 10);
+  if (isNaN(userAnswer) || userAnswer !== _captchaAnswer) {
+    captcha.style.borderColor = 'var(--red)';
+    feedback.innerHTML = '<div class="msg-error">❗ Incorrect answer — please try again.</div>';
+    refreshCaptcha();
+    return;
+  }
+  captcha.style.borderColor = 'var(--green)';
+
+  // Submit
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true; btn.textContent = '⏳ Sending…';
+
+  try {
+    const res = await fetch(form.action, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+      body: new FormData(form),
+    });
+
+    if (res.ok) {
+      feedback.innerHTML = '<div class="msg-success">✅ Message sent! We will reply to your email shortly.</div>';
+      form.reset();
+      refreshCaptcha();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      const err  = data.errors ? data.errors.map(e => e.message).join(', ') : 'Submission failed';
+      feedback.innerHTML = `<div class="msg-error">❌ Could not send: ${err}</div>`;
+    }
+  } catch {
+    feedback.innerHTML = '<div class="msg-error">❌ Network error — please check your connection and try again.</div>';
+  } finally {
+    btn.disabled = false; btn.textContent = '✉️ Send Message';
+  }
+});
+</script>
+</body>
+</html>
