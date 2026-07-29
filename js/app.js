@@ -534,7 +534,7 @@ const POPUP_HTML = `
       <li>Samples quantified using label-free quantification (LFQ)</li>
     </ul>
     <p class="close-hint">Click outside this box or press Esc to close.</p>
-    <p class="doi">DOI: <a href="https://www.nature.com/articles/s41594-026-01857-w" target="_blank" rel="noopener noreferrer">10.1038/s41594-026-01857-w</a></p>
+    <p class="doi">Check out our paper <a href="https://www.nature.com/articles/s41594-026-01857-w" target="_blank" rel="noopener noreferrer">10.1038/s41594-026-01857-w</a></p>
   </div>
 </div>`;
 
