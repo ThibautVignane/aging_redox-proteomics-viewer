@@ -512,7 +512,7 @@ const POPUP_HTML = `
 <div id="study-overlay" onclick="if(event.target===this)closeStudyPopup()">
   <div id="study-box">
     <button id="study-close" onclick="closeStudyPopup()">×</button>
-    <h2>🧪 Study Overview</h2>
+    <h2>🧪 <a href="https://www.nature.com/articles/s41594-026-01857-w" target="_blank" rel="noopener noreferrer">Study</a> Overview</h2>
     <p>This interactive platform explores and visualizes protein redox modifications
        (sulfenylation &amp; persulfidation) across aging and in CSE-deficient mice brain.</p>
     <p>We investigate how protein sulfenylation (PSOH) and persulfidation (PSSH) change
@@ -534,6 +534,7 @@ const POPUP_HTML = `
       <li>Samples quantified using label-free quantification (LFQ)</li>
     </ul>
     <p class="close-hint">Click outside this box or press Esc to close.</p>
+    <p class="doi">DOI: <a href="https://www.nature.com/articles/s41594-026-01857-w" target="_blank" rel="noopener noreferrer">10.1038/s41594-026-01857-w</a></p>
   </div>
 </div>`;
 
